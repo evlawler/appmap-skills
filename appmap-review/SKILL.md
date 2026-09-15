@@ -49,123 +49,64 @@ working tree** below; the baseline always comes from git.
 
 The pipeline turns two revisions into one interpreted review:
 
-1. **Resolve** `baseline` and `head`.
-2. **Locate** each revision's gold traces in git history.
-3. **Build an archive** of each revision's gold traces with `appmap archive`, which
-   indexes them and bundles the **sequence diagrams (with labels), OpenAPI, scanner
-   findings, and class map** — then unpack into a working directory as `base/` and
-   `head/`.
-4. **Compare** with `appmap compare`, producing the structural change report
-   (new/removed/changed traces, SQL diff, OpenAPI diff, per-trace sequence-diagram
-   diffs). The changed-vs-unchanged decision is made by a digest that **excludes
+1. **Compare** the two revisions' gold traces with the bundled helper,
+   `assets/review.mjs`. It reads each revision's gold traces from git, builds an
+   archive of each side with `appmap archive` (which indexes them and bundles the
+   **sequence diagrams (with labels), OpenAPI, scanner findings, and class map**),
+   and runs `appmap compare`. The result is the structural change report:
+   new/removed/changed traces, SQL diff, OpenAPI diff, per-trace sequence-diagram
+   diffs. The changed-vs-unchanged decision is made by a digest that **excludes
    volatile data** (elapsed time, object ids, parameter/return values), so timing
    jitter and unstable test data never register — a `changed` entry is real.
-5. **Interpret** the compare output + the source diff into findings, following the
+2. **Interpret** the compare output + the source diff into findings, following the
    **review recipe** below.
-6. **Render** the scannable report.
+3. **Render** the scannable report.
 
-## Locate the gold traces
+## Compare the two revisions
 
-Gold traces are committed AppMaps, by convention under
-`gold_traces/baseline/appmaps/**/*.appmap.json`, alongside a manifest
-`gold_traces/manifest.yaml`. Find them in each revision from git history
-(don't assume the working tree):
+Run the helper from the project root, the directory that holds `gold_traces/`:
 
 ```sh
-# discover the gold-trace appmaps committed at a revision
-git ls-tree -r --name-only <rev> | grep -E 'gold_traces/.*/appmaps/.*\.appmap\.json$'
+node "${CLAUDE_SKILL_DIR}/assets/review.mjs" compare --base <baseline-rev> [--head <head-rev>]
 ```
 
-Extract each revision's set into its own working directory, reproducing the layout
-the project's `appmap.yml` expects: the recordings live under `appmap_dir`, and each
-one's path *below* `appmaps/` in the baseline is its path *below* `appmap_dir`.
-Preserve that sub-path — don't flatten to the basename, or two traces that share a
-basename in different directories collide.
+`--head` defaults to `HEAD`. The helper needs git, Node, and the AppMap CLI
+(`@appland/appmap` ≥ 3.200.0), and no shell tools, so it runs the same on macOS,
+Linux, and Windows. It finds the CLI the way the gold-traces engine does:
+`commands.appmap_cli` in the manifest, else `~/.appmap/bin/appmap`, else
+`appmap` on `PATH`. In a monorepo, pass `--dir packages/<name>/gold_traces`.
 
-## Build the archives and compare
+It prints a short summary and where the results are:
 
-This exact sequence is verified against `@appland/appmap` ≥ 3.200.0. Run it from the
-project root (which has `appmap.yml`). `$appmap_dir` is the `appmap_dir:` value from
-`appmap.yml` (e.g. `tmp/appmap`); `$BASE`/`$HEAD` are the two revisions.
+```
+Base: main = 0070766 feat(routing): cancel a routed fleet's onward legs (48 gold traces)
+Head: HEAD = 7e08cc3 chore(gold-traces): re-bless multi-hop relay (50 gold traces)
 
-The project root may sit below the git repo root (e.g. `server/` in a monorepo).
-That's fine: `git ls-tree` returns paths relative to the current directory, and the
-`./` in `$ref:./$f` makes `git show` resolve them the same way.
+Traces: 1 changed, 2 new, 0 removed.
+  changed  pytest/test_multi_hop_routing  (diff/pytest/test_multi_hop_routing.diff.sequence.json)
+  new      pytest/test_cancel_fleet_route_rejects_fleets_without_onward_legs
+  new      pytest/test_routed_fleet_halts_when_the_onward_chain_is_gone
+SQL: 2 new queries, 0 removed.
+API: no breaking change, 0 other difference(s).
+Scanner findings: 0 new, 0 resolved.
 
-The workspace lives under the system temp dir, NOT inside the repo — work files in
-the repo tree can end up accidentally committed. The path is fixed (no random
-suffix) so later commands and inspection can find it; each run starts by clearing it.
-
-```sh
-appmap_dir=$(sed -n 's/^appmap_dir: *//p' appmap.yml)   # e.g. tmp/appmap
-review_root="${TMPDIR:-/tmp}/appmap-review"
-rm -rf "$review_root"
-
-# 1 — Extract each revision's committed gold traces into a per-revision working dir,
-#     under $appmap_dir, preserving each trace's sub-path (no basename flattening),
-#     and copy in appmap.yml so `archive` indexes both sides identically.
-for rev in base head; do
-  ref=$([ "$rev" = base ] && echo "$BASE" || echo "$HEAD")
-  mkdir -p "$review_root/$rev/$appmap_dir"
-  cp appmap.yml "$review_root/$rev/appmap.yml"
-  for f in $(git ls-tree -r --name-only "$ref" | grep -E 'gold_traces/.*/appmaps/.*\.appmap\.json$'); do
-    rel="${f##*/appmaps/}"                                # path under $appmap_dir
-    mkdir -p "$review_root/$rev/$appmap_dir/$(dirname "$rel")"
-    git show "$ref:./$f" > "$review_root/$rev/$appmap_dir/$rel"
-  done
-done
-
-# 1b — HEAD FROM THE WORKING TREE (pre-commit review): run instead of the head
-#      half of step 1. See "Head from the working tree" below for when to use which.
-#
-#      (a) the fresh recordings under $appmap_dir for the manifest's entries — what
-#          `check --record` / `update --dry-run` just produced, already sanitized by
-#          the engine. This is the review that decides what to bless.
-mkdir -p "$review_root/head/$appmap_dir"
-cp appmap.yml "$review_root/head/appmap.yml"
-for rel in $(sed -n 's/^ *appmap_path: *//p' gold_traces/manifest.yaml); do
-  mkdir -p "$review_root/head/$appmap_dir/$(dirname "$rel")"
-  cp "$appmap_dir/$rel" "$review_root/head/$appmap_dir/$rel"
-done
-#
-#      (b) baselines blessed in the working tree but not committed.
-# for f in $(find gold_traces -path '*/appmaps/*.appmap.json'); do
-#   rel="${f##*/appmaps/}"
-#   mkdir -p "$review_root/head/$appmap_dir/$(dirname "$rel")"
-#   cp "$f" "$review_root/head/$appmap_dir/$rel"
-# done
-
-# 2 — Archive each side. archive's DEFAULT output is .appmap/archive/full/<rev>.tar;
-#     do NOT pass an absolute --output-file (the internal tar mangles it). Just cd in
-#     and pass --revision. archive runs the scanner and OpenAPI automatically.
-( cd "$review_root/base" && appmap archive --revision base )
-( cd "$review_root/head" && appmap archive --revision head )
-
-# 3 — Restore each archive into <output-dir>/base and <output-dir>/head. `compare`
-#     REQUIRES the two revisions' data to already sit there before it runs, and it
-#     loads appmap.yml from its working dir — so put one there too.
-#     Use `appmap restore`, NOT a manual `tar xf`: the archive nests the AppMaps and
-#     their index files inside an inner appmaps.tar.gz, and restore unpacks both
-#     layers. A single tar extraction leaves the inner tarball packed, and compare
-#     then sees ZERO appmaps on both sides and silently reports only the API diff.
-#     Don't pre-create the base/ and head/ dirs — restore refuses to write into a
-#     directory that already exists.
-mkdir -p "$review_root/out/report"
-cp appmap.yml "$review_root/out/appmap.yml"
-( cd "$review_root/base" && appmap restore --revision base --output-dir ../out/report/base )
-( cd "$review_root/head" && appmap restore --revision head --output-dir ../out/report/head )
-
-# 4 — Compare. base/ and head/ live UNDER --output-dir (here `report`); compare writes
-#     change-report.json and diff/ alongside them. Do NOT pass --clobber-output-dir —
-#     it would delete the base/ and head/ you just restored.
-( cd "$review_root/out" && appmap compare --base-revision base --head-revision head --output-dir report )
-# results: $review_root/out/report/change-report.json  and  $review_root/out/report/diff/
+Change report: <workspace>/out/report/change-report.json
+Diff diagrams: <workspace>/out/report/diff
+Source diff:   git diff 0070766..7e08cc3
 ```
 
-`compare` writes `change-report.json` (the structural facts) and per-trace diff
-sequence diagrams under `report/diff/`. The diff sequence diagrams carry each
-action's `diffMode` (added/removed/changed) and its AppMap **labels** — the primary
-evidence for the recipe.
+Read the two outputs it names. They are the evidence for the recipe:
+
+| Output | What it holds |
+| --- | --- |
+| `change-report.json` | the structural facts: `changedAppMaps`, `newAppMaps`, `removedAppMaps`, `sqlDiff`, `apiDiff`, `findingDiff` |
+| `diff/**/*.diff.sequence.json` | one diagram per changed trace; each action carries its `diffMode` (added/removed/changed) and its AppMap **labels** |
+
+The workspace is `<system temp>/appmap-review`. It sits outside the repo, so its
+files never get committed by accident, and it is cleared at the start of every
+run. Pass `--workspace DIR` to keep two reviews side by side. When a CLI step
+fails, the error names the command and the directory it ran in, and the workspace
+is left in place to inspect.
 
 Note: captured values in gold traces are **sanitized** — each is a stable,
 equality-preserving token (`<v1>`, `<uuid:v3>`), not real data. Reason from labels,
@@ -177,22 +118,24 @@ token never registers as a change.
 
 The natural moment to review is before committing, and the gold-traces workflow
 depends on it: **appmap-gold-traces** says "re-record, review, then bless what the
-review confirms". The recordings that review must judge are not in git yet. Two
-working-tree sources cover it, both extracted by step 1b above:
+review confirms". The recordings that review must judge are not in git yet. The
+base always comes from git; the head can come from three places:
 
-| Head source | When | What it contains |
-| --- | --- | --- |
-| (a) fresh recordings under `appmap_dir`, for the manifest's entries | after `check --record` or `update --dry-run`, before `update` blesses anything | the candidates for blessing, sanitized by the engine |
-| (b) the working tree's `gold_traces/` | after `update` blessed, before the commit | the baselines as they would be committed |
+| Head | Flag | When | What it contains |
+| --- | --- | --- | --- |
+| a commit | `--head <rev>` (default `HEAD`) | the change is committed | the baselines committed at that revision |
+| fresh recordings | `--fresh` | after `check --record` or `update --dry-run`, before `update` blesses anything | the recordings under `appmap_dir` for the manifest's entries: the candidates for blessing, sanitized by the engine |
+| uncommitted baselines | `--uncommitted` | after `update` blessed, before the commit | the working tree's `gold_traces/baseline/appmaps`, as a commit would contain them |
 
-Source (a) is the one that closes the loop: run it, decide from the findings which
+`--fresh` is the one that closes the loop: run it, decide from the findings which
 drift is intended, then `update` (with `--only` for a partial bless), then commit.
-Source (b) is a last look at what a commit would contain.
+It needs a recording for every manifest entry and names any that are missing.
+`--uncommitted` is a last look at what a commit would contain.
 
-Everything after extraction is unchanged. In the report, write `working tree` as
+Everything after the compare is unchanged. In the report, write `working tree` as
 the head revision, and state once in the banner that the head recordings are
 uncommitted. The source diff for the recipe is `git diff <baseline>` with no head
-ref, which includes uncommitted changes.
+ref, which includes uncommitted changes; the helper prints it.
 
 ## Interpret — the review recipe
 

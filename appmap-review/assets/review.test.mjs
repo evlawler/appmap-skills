@@ -1,0 +1,223 @@
+// Tests for the review helper. Zero-install: run with the built-in test runner:
+//
+//   node --test appmap-review/assets/review.test.mjs
+//
+// Each test builds a throwaway git repo whose project sits in server/, as in a
+// monorepo, and runs the helper as a subprocess. A fake AppMap CLI stands in for
+// archive, restore, and compare: archive packs the trace contents it finds, restore
+// unpacks them, and compare writes a change report from the two sides. That
+// proves which traces reached each side, and with what contents, without the real
+// CLI. The real CLI is exercised against a real project, not here.
+
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const REVIEW = fileURLToPath(new URL('./review.mjs', import.meta.url));
+
+const FAKE_CLI = `import fs from 'node:fs';
+import path from 'node:path';
+const [command, ...rest] = process.argv.slice(2);
+const option = (name) => rest[rest.indexOf(name) + 1];
+if (!fs.existsSync('appmap.yml')) { console.error('no appmap.yml in ' + process.cwd()); process.exit(3); }
+function walk(dir, prefix = '') {
+  const out = {};
+  if (!fs.existsSync(dir)) return out;
+  for (const dirent of fs.readdirSync(dir, { withFileTypes: true })) {
+    const rel = prefix + dirent.name;
+    if (dirent.isDirectory()) Object.assign(out, walk(path.join(dir, dirent.name), rel + '/'));
+    else if (rel.endsWith('.appmap.json')) out[rel.slice(0, -'.appmap.json'.length)] = fs.readFileSync(path.join(dir, dirent.name), 'utf8');
+  }
+  return out;
+}
+if (command === 'archive') {
+  // Like the real CLI, archive fails when appmap_dir is missing, even with nothing to archive.
+  if (!fs.existsSync('tmp/appmap')) { console.error('AppMap directory tmp/appmap does not exist'); process.exit(4); }
+  fs.mkdirSync('.appmap/archive/full', { recursive: true });
+  fs.writeFileSync('.appmap/archive/full/' + option('--revision') + '.tar', JSON.stringify(walk('tmp/appmap')));
+} else if (command === 'restore') {
+  const out = option('--output-dir');
+  if (fs.existsSync(out)) { console.error('exists: ' + out); process.exit(2); }
+  fs.mkdirSync(out, { recursive: true });
+  fs.copyFileSync('.appmap/archive/full/' + option('--revision') + '.tar', path.join(out, 'traces.json'));
+} else if (command === 'compare') {
+  const out = option('--output-dir');
+  const read = (side) => JSON.parse(fs.readFileSync(path.join(out, side, 'traces.json'), 'utf8'));
+  const base = read('base');
+  const head = read('head');
+  fs.writeFileSync(path.join(out, 'change-report.json'), JSON.stringify({
+    testFailures: [],
+    newAppMaps: Object.keys(head).filter((name) => !(name in base)).sort(),
+    removedAppMaps: Object.keys(base).filter((name) => !(name in head)).sort(),
+    changedAppMaps: Object.keys(head).filter((name) => name in base && base[name] !== head[name]).sort()
+      .map((name) => ({ appmap: name, sequenceDiagramDiff: name + '.diff.sequence.json' })),
+    sqlDiff: { newQueries: ['select 1'], removedQueries: [], newTables: ['coupons'], removedTables: [] },
+    apiDiff: { breakingDifferencesFound: false, nonBreakingDifferences: [], unclassifiedDifferences: [] },
+    findingDiff: { new: [], resolved: [] },
+  }));
+} else {
+  process.exit(1);
+}
+`;
+
+const ENTRIES = [
+  ['alpha', 'pytest/alpha.appmap.json'],
+  ['beta', 'x/same.appmap.json'],
+  ['gamma', 'y/same.appmap.json'],
+];
+
+// base commit: alpha v1, x/same v1.  head commit: alpha v2, x/same v1, y/same v1.
+function makeRepo(t) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'appmap-review-test-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const repo = path.join(root, 'repo');
+  const server = path.join(repo, 'server');
+  const cli = path.join(root, 'fake-cli.mjs');
+  fs.mkdirSync(path.join(server, 'gold_traces', 'baseline', 'appmaps'), { recursive: true });
+  fs.writeFileSync(cli, FAKE_CLI);
+  fs.writeFileSync(path.join(server, 'appmap.yml'), 'name: fixture\nappmap_dir: tmp/appmap\n');
+  fs.writeFileSync(path.join(server, 'gold_traces', 'manifest.yaml'), `schema_version: 2
+commands:
+  framework: pytest
+  appmap_cli: ${JSON.stringify(`${process.execPath} ${cli}`)}
+entries:
+${ENTRIES.map(([name, appmapPath]) => `  - feature: demo
+    test_file: tests/test_demo.py
+    test_name: ${name}
+    appmap_path: ${appmapPath}
+    summary: ${name}
+`).join('')}`);
+
+  const gitRun = (...args) => {
+    const result = spawnSync('git', args, {
+      cwd: repo,
+      encoding: 'utf8',
+      env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@example.com', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@example.com' },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout.trim();
+  };
+  gitRun('init', '-q');
+  writeTrace(server, 'pytest/alpha.appmap.json', 'alpha v1');
+  writeTrace(server, 'x/same.appmap.json', 'same v1');
+  gitRun('add', '.');
+  gitRun('-c', 'commit.gpgsign=false', 'commit', '-q', '-m', 'base');
+  gitRun('tag', 'base');
+  writeTrace(server, 'pytest/alpha.appmap.json', 'alpha v2');
+  writeTrace(server, 'y/same.appmap.json', 'same v1');
+  gitRun('add', '.');
+  gitRun('-c', 'commit.gpgsign=false', 'commit', '-q', '-m', 'head');
+  return { root, server, workspace: path.join(root, 'workspace') };
+}
+
+function writeTrace(dir, relative, content, under = path.join('gold_traces', 'baseline', 'appmaps')) {
+  const file = path.join(dir, under, relative);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify({ content }));
+}
+
+function runReview(cwd, ...args) {
+  const result = spawnSync(process.execPath, [REVIEW, ...args], { cwd, encoding: 'utf8' });
+  assert.equal(result.error, undefined);
+  return result;
+}
+
+test('compare: two revisions from git, head defaulting to HEAD', (t) => {
+  const { server, workspace } = makeRepo(t);
+  const result = runReview(server, 'compare', '--base', 'base', '--workspace', workspace);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Base: base = \w+ base \(2 gold traces\)/);
+  assert.match(result.stdout, /Head: HEAD = \w+ head \(3 gold traces\)/);
+  assert.match(result.stdout, /Traces: 1 changed, 1 new, 0 removed\./);
+  assert.match(result.stdout, /changed  pytest\/alpha  \(diff\/pytest\/alpha\.diff\.sequence\.json\)/);
+  // Two traces share a basename; both keep their own directory.
+  assert.match(result.stdout, /new      y\/same/);
+  assert.match(result.stdout, /SQL: 1 new queries, 0 removed; tables \+coupons\./);
+  assert.match(result.stdout, /Source diff:   git diff \w+\.\.\w+/);
+  const report = path.join(workspace, 'out', 'report', 'change-report.json');
+  assert.ok(fs.existsSync(report));
+  assert.ok(result.stdout.includes(report));
+});
+
+test('compare: an explicit --head', (t) => {
+  const { server, workspace } = makeRepo(t);
+  const result = runReview(server, 'compare', '--base', 'base', '--head', 'base', '--workspace', workspace);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Traces: 0 changed, 0 new, 0 removed\./);
+});
+
+test('compare --uncommitted: head is the working tree baselines', (t) => {
+  const { server, workspace } = makeRepo(t);
+  writeTrace(server, 'x/same.appmap.json', 'same v2, blessed but not committed');
+  const result = runReview(server, 'compare', '--base', 'base', '--uncommitted', '--workspace', workspace);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Head: working tree, baselines under/);
+  assert.match(result.stdout, /Traces: 2 changed, 1 new, 0 removed\./);
+  assert.match(result.stdout, /changed  x\/same/);
+  assert.match(result.stdout, /Source diff:   git diff \w+\n/);
+});
+
+test('compare --fresh: head is the recordings for the manifest entries', (t) => {
+  const { server, workspace } = makeRepo(t);
+  const recordings = path.join('tmp', 'appmap');
+  writeTrace(server, 'pytest/alpha.appmap.json', 'alpha v1', recordings);
+  writeTrace(server, 'x/same.appmap.json', 'same v3', recordings);
+  const missing = runReview(server, 'compare', '--base', 'base', '--fresh', '--workspace', workspace);
+  assert.equal(missing.status, 1);
+  assert.match(missing.stderr, /--fresh needs a recording for every manifest entry/);
+  assert.match(missing.stderr, /gamma: /);
+  assert.match(missing.stderr, /check --record/);
+
+  writeTrace(server, 'y/same.appmap.json', 'same v1', recordings);
+  const result = runReview(server, 'compare', '--base', 'base', '--fresh', '--workspace', workspace);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Traces: 1 changed, 1 new, 0 removed\./);
+  assert.match(result.stdout, /changed  x\/same/);
+});
+
+test('compare: a base with no gold traces notes that every trace is new', (t) => {
+  const { server, workspace } = makeRepo(t);
+  const result = runReview(server, 'compare', '--base', 'base', '--head', 'HEAD', '--dir', 'gold_traces', '--workspace', workspace);
+  assert.equal(result.status, 0, result.stderr);
+  assert.doesNotMatch(result.stderr, /has no gold traces/);
+
+  fs.renameSync(path.join(server, 'gold_traces'), path.join(server, 'other_traces'));
+  const empty = runReview(server, 'compare', '--base', 'base', '--uncommitted', '--dir', 'other_traces', '--workspace', workspace);
+  assert.equal(empty.status, 0, empty.stderr);
+  assert.match(empty.stderr, /base has no gold traces/);
+  assert.match(empty.stdout, /Traces: 0 changed, 3 new, 0 removed\./);
+});
+
+test('compare: rejects a bad revision, conflicting heads, and a missing --base', (t) => {
+  const { server, workspace } = makeRepo(t);
+  const bad = runReview(server, 'compare', '--base', 'no-such-ref', '--workspace', workspace);
+  assert.equal(bad.status, 1);
+  assert.match(bad.stderr, /Cannot resolve 'no-such-ref' to a commit/);
+
+  const both = runReview(server, 'compare', '--base', 'base', '--head', 'HEAD', '--fresh');
+  assert.equal(both.status, 1);
+  assert.match(both.stderr, /at most one of --head, --fresh, and --uncommitted/);
+
+  const noBase = runReview(server, 'compare');
+  assert.equal(noBase.status, 1);
+  assert.match(noBase.stderr, /requires --base/);
+});
+
+test('compare: refuses to clear a workspace it did not make, and reuses one it did', (t) => {
+  const { root, server, workspace } = makeRepo(t);
+  const foreign = path.join(root, 'precious');
+  fs.mkdirSync(foreign);
+  fs.writeFileSync(path.join(foreign, 'notes.txt'), 'keep me');
+  const refused = runReview(server, 'compare', '--base', 'base', '--workspace', foreign);
+  assert.equal(refused.status, 1);
+  assert.match(refused.stderr, /Refusing to clear/);
+  assert.ok(fs.existsSync(path.join(foreign, 'notes.txt')));
+
+  assert.equal(runReview(server, 'compare', '--base', 'base', '--workspace', workspace).status, 0);
+  const again = runReview(server, 'compare', '--base', 'base', '--workspace', workspace);
+  assert.equal(again.status, 0, again.stderr);
+});

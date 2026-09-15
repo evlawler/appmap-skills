@@ -733,14 +733,19 @@ function changedAppmaps(before, after) {
 // The IDE extensions install the binary to ~/.appmap/bin/appmap, so prefer that
 // when present; otherwise fall back to `appmap` on PATH (the usual CI setup).
 // Either way, no configuration is required.
+// On Windows the binary carries an .exe extension.
 function defaultAppmapCli() {
-  const ideBin = path.join(os.homedir(), '.appmap', 'bin', 'appmap');
-  try {
-    accessSync(ideBin, fsConstants.X_OK);
-    return ideBin;
-  } catch {
-    return 'appmap';
+  const names = process.platform === 'win32' ? ['appmap.exe', 'appmap'] : ['appmap'];
+  for (const name of names) {
+    const ideBin = path.join(os.homedir(), '.appmap', 'bin', name);
+    try {
+      accessSync(ideBin, fsConstants.X_OK);
+      return ideBin;
+    } catch {
+      // try the next name
+    }
   }
+  return 'appmap';
 }
 
 function cliInvocation(env) {
@@ -1154,7 +1159,12 @@ function parseYaml(text, filename = 'manifest.yaml') {
     throw new Error(`Invalid YAML in ${filename}: ${error.message}`);
   }
 }
-export { parseYaml, diagramDigest, changedAppmaps, assessAppMap, coverageOf, coverageDelta };
+// The appmap-review skill's helper (appmap-review/assets/review.mjs) reuses the
+// manifest reader, the appmap.yml lookup, and the CLI resolution from here.
+export {
+  parseYaml, diagramDigest, changedAppmaps, assessAppMap, coverageOf, coverageDelta,
+  loadManifest, locateAppmap, defaultAppmapCli,
+};
 
 // Resolve symlinks on argv[1]: import.meta.url is always realpath-resolved, but
 // the invoked path may be a symlink (this skill is commonly symlinked into a

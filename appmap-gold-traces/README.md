@@ -45,15 +45,15 @@ the bless.
 ## Review (appmap-review)
 
 1. **Resolve** `baseline` and `head` (one revision ⇒ baseline + HEAD; two ⇒ explicit).
-2. **Locate** each revision's gold traces in git history (`git ls-tree` / `git show`).
-3. **Check capture-config parity** — both sides recorded the same way, or re-record the
+2. **Check capture-config parity** — both sides recorded the same way, or re-record the
    stale side (the common failure: base predates SQL capture / labels).
-4. **Archive each side** with `appmap archive`; unpack to `base/` and `head/`.
-5. **`appmap compare`** → change report. Changed-vs-unchanged is decided by the
-   `subtreeDigest`, which excludes elapsed time, ids, and values — so timing and
-   unstable-data jitter never register.
-6. **Interpret** (the recipe below) the compare output + the source diff into findings.
-7. **Render** the scannable report.
+3. **Compare** with the helper, `appmap-review/assets/review.mjs compare`. It reads each
+   revision's gold traces from git (or the head from the working tree), archives each
+   side with `appmap archive`, restores them, and runs `appmap compare` → change
+   report. Changed-vs-unchanged is decided by the `subtreeDigest`, which excludes
+   elapsed time, ids, and values — so timing and unstable-data jitter never register.
+4. **Interpret** (the recipe below) the compare output + the source diff into findings.
+5. **Render** the scannable report.
 
 ## Division of labor
 
@@ -111,9 +111,8 @@ CLI reads.
 
 - [ ] Merge appmap-js **#2369** (labels on diagram actions); pin a minimum `appmap_cli`
       version once released.
-- [ ] appmap-review engine: turn the `appmap-review/experimental/gold-archive.mjs`
-      prototype into the skill's flow driven by two revisions — locate-in-git →
-      parity-check → archive → `appmap compare` → digest.
+- [ ] appmap-review: add the capture-config parity check to `review.mjs compare`
+      (locate-in-git → archive → restore → `appmap compare` is already there).
 - [ ] Add `appmap archive --output-dir` (emit the indexed dir, skip the tar round-trip).
 - [ ] Drive the archived set from the manifest (archive only the curated tests).
 - [ ] Fold the label-annotated digest into `compare-report` as a first-class section.

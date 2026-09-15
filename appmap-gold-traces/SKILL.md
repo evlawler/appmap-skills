@@ -437,10 +437,10 @@ the two marked as a decision.
 
 3. **Review the changed traces.** Deciding whether a changed trace is the
    feature, a regression, or an unintended side effect is **appmap-review**'s
-   job. Run it with the last blessed commit as the baseline and the **working
-   tree** as the head (its "Head from the working tree", source (a)); it reads
-   the fresh, already-sanitized recordings under `appmap_dir`, which is exactly
-   the set `update` would bless. The last blessed commit:
+   job. Run it with the last blessed commit as the baseline and `--fresh` as the
+   head (its "Head from the working tree"): the review then reads the fresh,
+   already-sanitized recordings under `appmap_dir`, which is exactly the set
+   `update` would bless. The last blessed commit:
    ```sh
    git log -1 --format=%h -- gold_traces/baseline/appmaps/
    ```
