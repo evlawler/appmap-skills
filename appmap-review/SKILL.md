@@ -90,10 +90,15 @@ SQL: 2 new queries, 0 removed.
 API: no breaking change, 0 other difference(s).
 Scanner findings: 0 new, 0 resolved.
 
+Command:       node /home/me/.claude/skills/appmap-review/assets/review.mjs compare --base main
+Run in:        /home/me/src/nova/server
 Change report: <workspace>/out/report/change-report.json
 Diff diagrams: <workspace>/out/report/diff
 Source diff:   git diff 0070766..7e08cc3
 ```
+
+The `Command` and `Run in` lines echo the compare exactly as it ran. They go into
+the report's closing section, so a reader can rerun it.
 
 Read the two outputs it names. They are the evidence for the recipe:
 
@@ -166,7 +171,9 @@ Three things change in the review. Values are real, so use them when they
 explain a finding but do not paste secrets or personal data into a report. Skip
 the `covers` lookups in Step 2; coverage is only what the run touched, and the
 matrix says so. Say once in the banner that the two sides are hand-made
-recordings of one scenario, so a clean compare clears only that scenario. If a
+recordings of one scenario, so a clean compare clears only that scenario, and
+replace the header's **Revisions** line with a **Recordings** line naming the two
+files. If a
 changed trace looks like data noise rather than a code change, record one branch
 twice and compare those first.
 
@@ -304,6 +311,11 @@ unchanged — this section is how its output is *rendered*. Four principles gove
   sentences beats four dense paragraphs. Keep it inside a fenced block so it survives
   GitHub rendering; keep lines under 90 characters so it does not wrap.
 
+- **Say how the review was invoked.** The header's **Method** line says in a few
+  words which kind of review this was. The full record goes at the very end, after
+  the detail fold: the request as the user gave it and the compare command exactly
+  as it ran, from the helper's `Command` and `Run in` lines. In ad-hoc mode this is
+  the only record of which two files were compared.
 - **Single home.** Every fact is stated exactly once. A finding lives in **Findings**
   and nowhere else — ledger and coverage rows *reference* it by number (`→ #2`). A
   cross-cutting caveat (first-ever baseline, partial trace set) is stated once in the
@@ -334,6 +346,9 @@ the detail stays accessible without being paid for on every read):
 
 **Revisions:** `<head>` vs `<baseline>` · **Date:** <YYYY-MM-DD> ·
 **Commits:** `<sha>` <short subject> · … (group out-of-scope commits in one parenthetical)
+
+**Method:** <one line: "gold traces, `<base>`..`<head>`", or "two ad-hoc recordings of one
+scenario, `<name>`"; the full invocation is at the end of the report>
 
 > ⚠️ **How this review works.** <Two or three sentences for a reader who has never
 > heard of gold traces: recorded test runs were re-run on the head revision and
@@ -444,6 +459,13 @@ which subsystems held still, which traces are new — plus any acceptable Step-5
 side effects (mechanical propagation, confirmed blast radius).
 
 </details>
+
+## How this review was invoked
+
+- **Request:** <the request as the user gave it, quoted>
+- **Compare:** `<the helper's Command line>`
+- **Run in:** `<its Run in directory>`
+- **Evidence:** `<workspace>/out/report` (change report and diff diagrams)
 ~~~
 
 ## Rules for the interpretation

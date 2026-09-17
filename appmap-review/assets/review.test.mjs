@@ -138,6 +138,9 @@ test('compare: two revisions from git, head defaulting to HEAD', (t) => {
   assert.match(result.stdout, /new      y\/same/);
   assert.match(result.stdout, /SQL: 1 new queries, 0 removed; tables \+coupons\./);
   assert.match(result.stdout, /Source diff:   git diff \w+\.\.\w+/);
+  // The command line is echoed as typed, and the directory it ran in.
+  assert.match(result.stdout, /Command:       node \S+review\.mjs compare --base base --workspace \S+\n/);
+  assert.match(result.stdout, /Run in:        \S+[\\/]repo[\\/]server\n/);
   const report = path.join(workspace, 'out', 'report', 'change-report.json');
   assert.ok(fs.existsSync(report));
   assert.ok(result.stdout.includes(report));

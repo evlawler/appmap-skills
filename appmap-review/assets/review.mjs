@@ -217,6 +217,9 @@ gold_traces/, only the nearest appmap.yml above the current directory.
                     did not make.
   --help            Show this help.
 
+The summary ends with the command line as typed and the directory it ran in;
+copy both into the report so a reader can rerun the compare.
+
 Output, under the workspace:
   out/report/change-report.json   new, removed, and changed traces; SQL, API, and findings diffs
   out/report/diff/                one diff sequence diagram per changed trace
@@ -479,6 +482,8 @@ async function printSummary({ base, head, counts, reportDir }) {
   if (failures.length > 0) console.log(`Test failures recorded: ${failures.length}.`);
 
   console.log('');
+  console.log(`Command:       ${invocation()}`);
+  console.log(`Run in:        ${process.cwd()}`);
   console.log(`Change report: ${reportFile}`);
   console.log(`Diff diagrams: ${path.join(reportDir, 'diff')}`);
   if (base.sha) {
@@ -486,6 +491,13 @@ async function printSummary({ base, head, counts, reportDir }) {
   } else {
     console.log('Source diff:   not named; pass --base REV [--head REV] to have it printed here.');
   }
+}
+
+// The command line as typed, for the report's invocation record. Values with
+// spaces are quoted so the line can be run again as printed.
+function invocation() {
+  const quote = (arg) => (/[\s"']/.test(arg) ? JSON.stringify(arg) : arg);
+  return ['node', process.argv[1], ...process.argv.slice(2)].map(quote).join(' ');
 }
 
 // Resolve symlinks on argv[1] (the skill is often symlinked into .claude/skills/),
