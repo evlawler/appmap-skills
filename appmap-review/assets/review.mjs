@@ -13,11 +13,11 @@
 // It needs only git, Node, and the AppMap CLI, so it runs the same on macOS,
 // Linux, and Windows. The steps, and the CLI traps each one avoids:
 //
-//   1. Extract each side's gold traces into <workspace>/base and <workspace>/head,
+//   1. Collect each side's gold traces into <workspace>/base and <workspace>/head,
 //      under appmap_dir, keeping each trace's path below baseline/appmaps/ (two
-//      traces may share a basename). The base always comes from git. The head
-//      comes from git, from the fresh recordings (--fresh), or from the working
-//      tree's baselines (--uncommitted).
+//      traces may share a basename). Each side is a "source" (see below): the
+//      base is always a git revision; the head is a git revision, the fresh
+//      recordings (--fresh), or the working tree's baselines (--uncommitted).
 //   2. `appmap archive` each side. It writes its default .appmap/archive/full/<rev>.tar;
 //      an absolute --output-file is mangled by its internal tar.
 //   3. `appmap restore` each archive into out/report/<rev>. A plain tar extraction
@@ -68,14 +68,14 @@ async function main() {
   const baselineDir = path.join(goldDir, 'baseline', 'appmaps');
   const cli = cliInvocation(config.appmap_cli);
 
-  const base = resolveRevision(projectRoot, options.base);
+  const base = gitSource(projectRoot, options.base, baselineDir);
   let head;
   if (options.fresh) {
-    head = { label: `working tree, fresh recordings under ${appmapsDir}` };
+    head = freshSource(config.entries, appmapsDir);
   } else if (options.uncommitted) {
-    head = { label: `working tree, baselines under ${baselineDir}` };
+    head = uncommittedSource(baselineDir);
   } else {
-    head = resolveRevision(projectRoot, options.head ?? 'HEAD');
+    head = gitSource(projectRoot, options.head ?? 'HEAD', baselineDir);
   }
 
   const workspace = await prepareWorkspace(path.resolve(options.workspace ?? path.join(os.tmpdir(), 'appmap-review')));
@@ -88,14 +88,8 @@ async function main() {
   const headAppmaps = path.join(workspace, 'head', appmapDir);
   await fs.mkdir(baseAppmaps, { recursive: true });
   await fs.mkdir(headAppmaps, { recursive: true });
-  counts.base = await extractFromGit(projectRoot, base.sha, baselineDir, baseAppmaps);
-  if (options.fresh) {
-    counts.head = await copyFreshRecordings(config.entries, appmapsDir, headAppmaps);
-  } else if (options.uncommitted) {
-    counts.head = await copyTree(baselineDir, headAppmaps);
-  } else {
-    counts.head = await extractFromGit(projectRoot, head.sha, baselineDir, headAppmaps);
-  }
+  counts.base = await base.collect(baseAppmaps);
+  counts.head = await head.collect(headAppmaps);
   if (counts.base === 0) {
     console.error(`note: ${base.rev} has no gold traces under ${baselineDir}; every head trace will show as new.`);
   }
@@ -184,6 +178,34 @@ Output, under the workspace:
   out/report/change-report.json   new, removed, and changed traces; SQL, API, and findings diffs
   out/report/diff/                one diff sequence diagram per changed trace
 `);
+}
+
+// ---------------------------------------------------------------------------
+// Sources: where each side's recordings come from
+// ---------------------------------------------------------------------------
+//
+// A source is { label, collect(dest) } plus, for a git revision, { rev, sha,
+// short }. `collect` copies the side's recordings under `dest` (the side's
+// appmap_dir in the workspace) and returns how many it copied. The summary
+// prints the label; the source diff line uses the sha when there is one.
+
+function gitSource(projectRoot, rev, baselineDir) {
+  const revision = resolveRevision(projectRoot, rev);
+  return { ...revision, collect: (dest) => extractFromGit(projectRoot, revision.sha, baselineDir, dest) };
+}
+
+function freshSource(entries, appmapsDir) {
+  return {
+    label: `working tree, fresh recordings under ${appmapsDir}`,
+    collect: (dest) => copyFreshRecordings(entries, appmapsDir, dest),
+  };
+}
+
+function uncommittedSource(baselineDir) {
+  return {
+    label: `working tree, baselines under ${baselineDir}`,
+    collect: (dest) => copyTree(baselineDir, dest),
+  };
 }
 
 // ---------------------------------------------------------------------------
