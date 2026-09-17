@@ -30,6 +30,8 @@
 //      restore refuses a directory that already exists, so none is created first.
 //   4. `appmap compare` from out/, which needs appmap.yml in its working dir. No
 //      --clobber-output-dir: it would delete the restored base/ and head/.
+//   5. For each changed trace, write a plain-text diff of the two call trees and
+//      say which view to read first (views.mjs).
 //
 // The workspace lives outside the repo, so its files are never committed by accident.
 
@@ -44,6 +46,7 @@ import { pathToFileURL } from 'node:url';
 // The manifest reader, the appmap.yml lookup, and the CLI resolution are shared
 // with the gold-traces engine, which this skill already depends on.
 import { loadManifest, locateAppmap, defaultAppmapCli } from '../../appmap-gold-traces/assets/manage.mjs';
+import { describeChangedTraces } from './views.mjs';
 
 const WORKSPACE_MARKER = '.appmap-review-workspace';
 
@@ -139,7 +142,11 @@ async function main() {
   console.error('Comparing...');
   runCli(cli, ['compare', '--base-revision', 'base', '--head-revision', 'head', '--output-dir', 'report'], out);
 
-  await printSummary({ base, head, counts, reportDir: path.join(out, 'report') });
+  // 5 — the two views of each changed trace, and which to read first
+  const reportDir = path.join(out, 'report');
+  const views = await describeChangedTraces({ run: (args, cwd) => runCli(cli, args, cwd), workspace, appmapDir, reportDir });
+
+  await printSummary({ base, head, counts, reportDir, views });
 }
 
 function parseArgs(args) {
@@ -223,6 +230,9 @@ copy both into the report so a reader can rerun the compare.
 Output, under the workspace:
   out/report/change-report.json   new, removed, and changed traces; SQL, API, and findings diffs
   out/report/diff/                one diff sequence diagram per changed trace
+  out/report/tree/                per changed trace, both call trees as text and their diff;
+                                  the summary says which view to read first, and why
+  base-query.db, head-query.db    query databases for 'appmap query tree|find ...'
 `);
 }
 
@@ -434,13 +444,14 @@ function runCli(cli, args, cwd) {
     const detail = [result.stdout, result.stderr].filter(Boolean).join('\n').trim();
     throw new Error(`Command failed in ${cwd}: ${command}\n${detail}`);
   }
+  return result.stdout;
 }
 
 // ---------------------------------------------------------------------------
 // Summary
 // ---------------------------------------------------------------------------
 
-async function printSummary({ base, head, counts, reportDir }) {
+async function printSummary({ base, head, counts, reportDir, views }) {
   const reportFile = path.join(reportDir, 'change-report.json');
   const report = JSON.parse(await fs.readFile(reportFile, 'utf8'));
   const list = (value) => (Array.isArray(value) ? value : []);
@@ -453,9 +464,16 @@ async function printSummary({ base, head, counts, reportDir }) {
   console.log(`Head: ${head.label}${traces(head, counts.head)}`);
   console.log('');
   console.log(`Traces: ${changed.length} changed, ${added.length} new, ${removed.length} removed.`);
+  const readWord = { diagram: 'the diagram', tree: 'the tree diff first, then the diagram', both: 'both, the tree diff for the shape and the diagram for the labels' };
   for (const item of changed) {
-    const diff = item.sequenceDiagramDiff ? `  (diff/${item.sequenceDiagramDiff})` : '';
-    console.log(`  changed  ${item.appmap}${diff}`);
+    console.log(`  changed  ${item.appmap}`);
+    const view = views[item.appmap] ?? {};
+    if (item.sequenceDiagramDiff) {
+      const nodes = view.diagram ? `${view.diagram.diff} of ${view.diagram.total} nodes changed` : 'not measured';
+      console.log(`           diagram: ${nodes}  (diff/${item.sequenceDiagramDiff})`);
+    }
+    if (view.tree) console.log(`           tree:    ${view.tree.lines} lines changed  (tree/${item.appmap}.diff.txt)`);
+    if (view.advice) console.log(`           read:    ${readWord[view.advice.read]}. ${view.advice.reason}.`);
   }
   for (const name of added) console.log(`  new      ${name}`);
   for (const name of removed) console.log(`  removed  ${name}`);
@@ -485,6 +503,7 @@ async function printSummary({ base, head, counts, reportDir }) {
   console.log(`Command:       ${invocation()}`);
   console.log(`Run in:        ${process.cwd()}`);
   console.log(`Change report: ${reportFile}`);
+  if (Object.values(views).some((view) => view.tree)) console.log(`Tree diffs:    ${path.join(reportDir, 'tree')}`);
   console.log(`Diff diagrams: ${path.join(reportDir, 'diff')}`);
   if (base.sha) {
     console.log(`Source diff:   git diff ${head.sha ? `${base.short}..${head.short}` : base.short}`);

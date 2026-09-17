@@ -49,16 +49,36 @@ if (command === 'archive') {
   const read = (side) => JSON.parse(fs.readFileSync(path.join(out, side, 'traces.json'), 'utf8'));
   const base = read('base');
   const head = read('head');
+  const changed = Object.keys(head).filter((name) => name in base && base[name] !== head[name]).sort();
+  // A diff sequence diagram per changed trace: five unchanged nodes, the base
+  // content removed, the head content added.
+  for (const name of changed) {
+    const node = (id, diffMode) => ({ nodeType: 3, name: id, stableProperties: { id }, children: [], ...(diffMode ? { diffMode } : {}) });
+    const actions = [1, 2, 3, 4, 5].map((i) => node('same' + i));
+    actions.push(node(JSON.parse(base[name]).content, 2), node(JSON.parse(head[name]).content, 1));
+    const file = path.join(out, 'diff', name + '.diff.sequence.json');
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify({ actors: [], rootActions: actions }));
+  }
   fs.writeFileSync(path.join(out, 'change-report.json'), JSON.stringify({
     testFailures: [],
     newAppMaps: Object.keys(head).filter((name) => !(name in base)).sort(),
     removedAppMaps: Object.keys(base).filter((name) => !(name in head)).sort(),
-    changedAppMaps: Object.keys(head).filter((name) => name in base && base[name] !== head[name]).sort()
-      .map((name) => ({ appmap: name, sequenceDiagramDiff: name + '.diff.sequence.json' })),
+    changedAppMaps: changed.map((name) => ({ appmap: name, sequenceDiagramDiff: name + '.diff.sequence.json' })),
     sqlDiff: { newQueries: ['select 1'], removedQueries: [], newTables: ['coupons'], removedTables: [] },
     apiDiff: { breakingDifferencesFound: false, nonBreakingDifferences: [], unclassifiedDifferences: [] },
     findingDiff: { new: [], resolved: [] },
   }));
+} else if (command === 'index') {
+  fs.writeFileSync(option('--query-db'), 'fake query db');
+} else if (command === 'query' && rest[0] === 'tree' && rest.includes('--json')) {
+  // One call named after the trace's content, with a timing and a return value
+  // to leave out, and a query under it whose text must survive whole.
+  const { content } = JSON.parse(fs.readFileSync(path.join(option('--appmap-dir'), rest[1] + '.appmap.json'), 'utf8'));
+  process.stdout.write(JSON.stringify([
+    { kind: 'function', event_id: 1, parent_event_id: null, depth: 0, fqid: 'app/' + content, elapsed_ms: 3, return_value: '<v1>' },
+    { kind: 'sql', event_id: 2, parent_event_id: 1, depth: 1, sql_text: 'SELECT a,\\n  b FROM t WHERE id = 42', elapsed_ms: 0 },
+  ]));
 } else {
   process.exit(1);
 }
@@ -133,7 +153,12 @@ test('compare: two revisions from git, head defaulting to HEAD', (t) => {
   assert.match(result.stdout, /Base: base = \w+ base \(2 gold traces\)/);
   assert.match(result.stdout, /Head: HEAD = \w+ head \(3 gold traces\)/);
   assert.match(result.stdout, /Traces: 1 changed, 1 new, 0 removed\./);
-  assert.match(result.stdout, /changed  pytest\/alpha  \(diff\/pytest\/alpha\.diff\.sequence\.json\)/);
+  // Per changed trace: the diagram, the tree diff, and which to read first.
+  assert.match(result.stdout, /changed  pytest\/alpha\n {11}diagram: 2 of 7 nodes changed  \(diff\/pytest\/alpha\.diff\.sequence\.json\)\n {11}tree: {4}2 lines changed  \(tree\/pytest\/alpha\.diff\.txt\)\n {11}read: {4}the diagram\. 2 nodes changed; small enough to read as is\./);
+  const tree = path.join(workspace, 'out', 'report', 'tree', 'pytest');
+  assert.equal(fs.readFileSync(path.join(tree, 'alpha.head.txt'), 'utf8'), 'CALL   app/alpha v2\n  SQL    SELECT a, b FROM t WHERE id = 42\n');
+  assert.match(fs.readFileSync(path.join(tree, 'alpha.diff.txt'), 'utf8'), /^-CALL {3}app\/alpha v1\n\+CALL {3}app\/alpha v2$/m);
+  assert.ok(fs.existsSync(path.join(workspace, 'head-query.db')));
   // Two traces share a basename; both keep their own directory.
   assert.match(result.stdout, /new      y\/same/);
   assert.match(result.stdout, /SQL: 1 new queries, 0 removed; tables \+coupons\./);
@@ -244,7 +269,7 @@ test('compare ad-hoc: two files compare as one trace, whatever their names', (t)
   assert.match(result.stdout, /Base: recording .*2026-09-16T10-00-00\.appmap\.json\n/);
   assert.match(result.stdout, /Head: recording .*2026-09-16T11-30-00\.appmap\.json\n/);
   assert.match(result.stdout, /Traces: 1 changed, 0 new, 0 removed\./);
-  assert.match(result.stdout, /changed  adhoc\/recording  \(diff\/adhoc\/recording\.diff\.sequence\.json\)/);
+  assert.match(result.stdout, /changed  adhoc\/recording\n {11}diagram: .*\(diff\/adhoc\/recording\.diff\.sequence\.json\)/);
   assert.match(result.stdout, /Source diff:   not named; pass --base REV/);
 
   // A name, and revisions for the source diff. A shared basename is the default name.

@@ -83,7 +83,10 @@ Base: main = 0070766 feat(routing): cancel a routed fleet's onward legs (48 gold
 Head: HEAD = 7e08cc3 chore(gold-traces): re-bless multi-hop relay (50 gold traces)
 
 Traces: 1 changed, 2 new, 0 removed.
-  changed  pytest/test_multi_hop_routing  (diff/pytest/test_multi_hop_routing.diff.sequence.json)
+  changed  pytest/test_multi_hop_routing
+           diagram: 9 of 111 nodes changed  (diff/pytest/test_multi_hop_routing.diff.sequence.json)
+           tree:    11 lines changed  (tree/pytest/test_multi_hop_routing.diff.txt)
+           read:    the tree diff first, then the diagram. DepartureEvent.create removed and added again: a moved block, which the tree diff shows as a move.
   new      pytest/test_cancel_fleet_route_rejects_fleets_without_onward_legs
   new      pytest/test_routed_fleet_halts_when_the_onward_chain_is_gone
 SQL: 2 new queries, 0 removed.
@@ -93,6 +96,7 @@ Scanner findings: 0 new, 0 resolved.
 Command:       node /home/me/.claude/skills/appmap-review/assets/review.mjs compare --base main
 Run in:        /home/me/src/nova/server
 Change report: <workspace>/out/report/change-report.json
+Tree diffs:    <workspace>/out/report/tree
 Diff diagrams: <workspace>/out/report/diff
 Source diff:   git diff 0070766..7e08cc3
 ```
@@ -100,12 +104,19 @@ Source diff:   git diff 0070766..7e08cc3
 The `Command` and `Run in` lines echo the compare exactly as it ran. They go into
 the report's closing section, so a reader can rerun it.
 
-Read the two outputs it names. They are the evidence for the recipe:
+Read the outputs it names. They are the evidence for the recipe:
 
 | Output | What it holds |
 | --- | --- |
 | `change-report.json` | the structural facts: `changedAppMaps`, `newAppMaps`, `removedAppMaps`, `sqlDiff`, `apiDiff`, `findingDiff` |
-| `diff/**/*.diff.sequence.json` | one diagram per changed trace; each action carries its `diffMode` (added/removed/changed) and its AppMap **labels** |
+| `diff/**/*.diff.sequence.json` | one diagram per changed trace; each action carries its `diffMode` (added/removed/changed) and its AppMap **labels**. The authority for whether a trace changed, and the only view with labels. It folds loops, and it shows a block that moved to a new caller as a removal plus an addition. |
+| `tree/<trace>.diff.txt` | the same change as plain text: both call trees, one line per call, query, request, exception, or log line, and their diff. Timings and return values are left out; SQL is kept whole, literals included, so a query that differs only in a literal shows here even though the compare treats it as the same query. A moved block reads as a move. Loops are not folded. |
+
+A changed trace has two views, and the summary's `read:` line says which to read
+first and why. Follow it: the helper measures both and prefers the tree diff only
+when it will read better (a moved block, or a diff too large to scan), the diagram
+in every other case, and both when the changed nodes carry labels. The sequence
+diagram remains the authority for whether a trace changed.
 
 The workspace is `<system temp>/appmap-review`. It sits outside the repo, so its
 files never get committed by accident, and it is cleared at the start of every
@@ -183,10 +194,11 @@ The compare output is *facts*; the **review is your interpretation of them** —
 each change means and what to do. A fixed findings table can't reason about a change
 the way you can. Run all steps in one pass, then render.
 
-Everywhere a step needs runtime evidence, read the **change report** and the
-**per-trace diff sequence diagrams**, together with the **source diff**
-(`git diff <baseline>..<head>`). The AppMaps are not background — they are the
-evidence of *what changed*.
+Everywhere a step needs runtime evidence, read the **change report** and, for
+each changed trace, the view its `read:` line names (the **diff sequence diagram**
+by default, the **tree diff** when the helper measured a moved block or a large
+diff), together with the **source diff** (`git diff <baseline>..<head>`). The
+AppMaps are not background — they are the evidence of *what changed*.
 
 **1 — Feature List & intended scope.** Inspect the source diff, enumerate the
 features and functional changes (application code only — not tests/config), and name
