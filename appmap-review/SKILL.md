@@ -1,6 +1,6 @@
 ---
 name: appmap-review
-description: Review the runtime-behavior change between two revisions using the committed gold traces. Archives and compares each side with the AppMap CLI, then interprets the result into a findings-first report covering unintended side effects, missing security checks, SQL and HTTP risks, and coverage gaps. Use when asked to review a branch, PR, or release for behavioral change, or to decide which changed gold traces to bless. Needs gold traces maintained by appmap-gold-traces.
+description: Review the runtime-behavior change between two revisions using the committed gold traces, or between two AppMap recordings made by hand (for example one Postman run recorded on each of two branches). Archives and compares each side with the AppMap CLI, then interprets the result into a findings-first report covering unintended side effects, missing security checks, SQL and HTTP risks, and coverage gaps. Use when asked to review a branch, PR, or release for behavioral change, to compare two AppMap recordings, or to decide which changed gold traces to bless. The gold-traces path needs baselines maintained by appmap-gold-traces; the ad-hoc path needs only the two recordings.
 ---
 
 # Skill: AppMap Behavioral Review
@@ -136,6 +136,39 @@ Everything after the compare is unchanged. In the report, write `working tree` a
 the head revision, and state once in the banner that the head recordings are
 uncommitted. The source diff for the recipe is `git diff <baseline>` with no head
 ref, which includes uncommitted changes; the helper prints it.
+
+## Reviewing two ad-hoc recordings
+
+When there are no gold traces, only the same scenario recorded by hand on each
+branch (a Postman run against a server with remote recording on, say), the
+review runs on those two files:
+
+```sh
+node "${CLAUDE_SKILL_DIR}/assets/review.mjs" compare \
+  --base-appmap <recording made on the base branch> \
+  --head-appmap <recording made on the head branch> \
+  --name <scenario> [--base <base-rev> --head <head-rev>]
+```
+
+Run it inside the project so the right `appmap.yml` is found. Both files are
+copied to one trace name, so timestamp-named files compare as one trace. Give the
+scenario a `--name`, and pass the revisions when the branches are known so the
+helper prints the source diff. What differs from the gold-traces path:
+
+| | Gold traces | Ad-hoc recordings |
+| --- | --- | --- |
+| Recordings | git, at each revision | the two files |
+| Manifest and `gold_traces/` | required | not read |
+| Captured values | sanitized tokens | real values |
+| `--base` / `--head` | the revisions compared | optional; only name the source diff |
+
+Three things change in the review. Values are real, so use them when they
+explain a finding but do not paste secrets or personal data into a report. Skip
+the `covers` lookups in Step 2; coverage is only what the run touched, and the
+matrix says so. Say once in the banner that the two sides are hand-made
+recordings of one scenario, so a clean compare clears only that scenario. If a
+changed trace looks like data noise rather than a code change, record one branch
+twice and compare those first.
 
 ## Interpret — the review recipe
 

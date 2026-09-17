@@ -9,6 +9,7 @@
 //   node <skill>/assets/review.mjs compare --base main
 //   node <skill>/assets/review.mjs compare --base v1.2.0 --head feature-branch
 //   node <skill>/assets/review.mjs compare --base <last blessed commit> --fresh
+//   node <skill>/assets/review.mjs compare --base-appmap old.appmap.json --head-appmap new.appmap.json
 //
 // It needs only git, Node, and the AppMap CLI, so it runs the same on macOS,
 // Linux, and Windows. The steps, and the CLI traps each one avoids:
@@ -18,6 +19,10 @@
 //      traces may share a basename). Each side is a "source" (see below): the
 //      base is always a git revision; the head is a git revision, the fresh
 //      recordings (--fresh), or the working tree's baselines (--uncommitted).
+//      Or both sides are single files (--base-appmap/--head-appmap): two
+//      recordings of one scenario made by hand, copied to one shared trace name
+//      so they compare as one trace however the files were named. That mode
+//      reads no manifest and no gold traces.
 //   2. `appmap archive` each side. It writes its default .appmap/archive/full/<rev>.tar;
 //      an absolute --output-file is mangled by its internal tar.
 //   3. `appmap restore` each archive into out/report/<rev>. A plain tar extraction
@@ -38,7 +43,7 @@ import { pathToFileURL } from 'node:url';
 
 // The manifest reader, the appmap.yml lookup, and the CLI resolution are shared
 // with the gold-traces engine, which this skill already depends on.
-import { loadManifest, locateAppmap } from '../../appmap-gold-traces/assets/manage.mjs';
+import { loadManifest, locateAppmap, defaultAppmapCli } from '../../appmap-gold-traces/assets/manage.mjs';
 
 const WORKSPACE_MARKER = '.appmap-review-workspace';
 
@@ -51,7 +56,14 @@ async function main() {
   if (command !== 'compare') {
     throw new Error(`Unknown command: ${command}. The only command is 'compare'; see --help.`);
   }
-  if (!options.base) {
+  const adhoc = options.baseAppmap !== null || options.headAppmap !== null;
+  if (adhoc && (options.baseAppmap === null || options.headAppmap === null)) {
+    throw new Error('Ad-hoc mode needs both sides: pass --base-appmap FILE and --head-appmap FILE.');
+  }
+  if (adhoc && (options.fresh || options.uncommitted)) {
+    throw new Error('--base-appmap/--head-appmap cannot be combined with --fresh or --uncommitted.');
+  }
+  if (!adhoc && !options.base) {
     throw new Error('compare requires --base REV, the revision to compare against.');
   }
   const headSources = [options.head !== null, options.fresh, options.uncommitted].filter(Boolean).length;
@@ -61,20 +73,30 @@ async function main() {
 
   const projectRoot = process.cwd();
   const goldDir = path.resolve(projectRoot, options.dir);
-  const config = await loadManifest(path.join(goldDir, 'manifest.yaml'));
-  const { appmapYmlDir, appmapDir } = await locateAppmap(goldDir);
+  // Ad-hoc mode has no manifest: the recordings are named on the command line
+  // and the CLI comes from --appmap-cli or the usual default.
+  const config = adhoc ? null : await loadManifest(path.join(goldDir, 'manifest.yaml'));
+  const { appmapYmlDir, appmapDir } = await locateAppmap(adhoc ? projectRoot : goldDir);
   const appmapYml = path.join(appmapYmlDir, 'appmap.yml');
   const appmapsDir = path.join(appmapYmlDir, appmapDir);
   const baselineDir = path.join(goldDir, 'baseline', 'appmaps');
-  const cli = cliInvocation(config.appmap_cli);
+  const cli = cliInvocation(adhoc ? options.appmapCli ?? defaultAppmapCli() : config.appmap_cli);
 
-  const base = gitSource(projectRoot, options.base, baselineDir);
+  let base;
   let head;
-  if (options.fresh) {
+  if (adhoc) {
+    // The revisions are optional here; they only name the source diff.
+    const name = options.name ?? sharedName(options.baseAppmap, options.headAppmap);
+    base = fileSource(options.baseAppmap, name, options.base && resolveRevision(projectRoot, options.base));
+    head = fileSource(options.headAppmap, name, options.head && resolveRevision(projectRoot, options.head));
+  } else if (options.fresh) {
+    base = gitSource(projectRoot, options.base, baselineDir);
     head = freshSource(config.entries, appmapsDir);
   } else if (options.uncommitted) {
+    base = gitSource(projectRoot, options.base, baselineDir);
     head = uncommittedSource(baselineDir);
   } else {
+    base = gitSource(projectRoot, options.base, baselineDir);
     head = gitSource(projectRoot, options.head ?? 'HEAD', baselineDir);
   }
 
@@ -107,7 +129,7 @@ async function main() {
 
   // 2, 3 — archive and restore
   for (const side of ['base', 'head']) {
-    console.error(`Archiving ${side} (${counts[side]} gold trace(s))...`);
+    console.error(`Archiving ${side} (${counts[side]} AppMap(s))...`);
     const sideDir = path.join(workspace, side);
     runCli(cli, ['archive', '--revision', side], sideDir);
     runCli(cli, ['restore', '--revision', side, '--output-dir', path.join('..', 'out', 'report', side)], sideDir);
@@ -129,8 +151,15 @@ function parseArgs(args) {
     fresh: false,
     uncommitted: false,
     workspace: null,
+    baseAppmap: null,
+    headAppmap: null,
+    name: null,
+    appmapCli: null,
   };
-  const valued = { '--dir': 'dir', '--base': 'base', '--head': 'head', '--workspace': 'workspace' };
+  const valued = {
+    '--dir': 'dir', '--base': 'base', '--head': 'head', '--workspace': 'workspace',
+    '--base-appmap': 'baseAppmap', '--head-appmap': 'headAppmap', '--name': 'name', '--appmap-cli': 'appmapCli',
+  };
   let command = null;
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
@@ -157,9 +186,15 @@ function printHelp() {
   console.log(`Usage:
   node <skill>/assets/review.mjs compare --base REV [--head REV | --fresh | --uncommitted]
                                          [--dir DIR] [--workspace DIR]
+  node <skill>/assets/review.mjs compare --base-appmap FILE --head-appmap FILE [--name NAME]
+                                         [--base REV] [--head REV] [--appmap-cli CMD] [--workspace DIR]
 
 Compares the gold traces of two revisions with the AppMap CLI (archive, restore,
 compare) and prints where the results are. Interpreting them is the review.
+
+The second form (ad-hoc mode) compares two recordings made by hand, for example
+one Postman run recorded on each of two branches. It reads no manifest and no
+gold_traces/, only the nearest appmap.yml above the current directory.
 
   --base REV        The baseline revision: any git ref. Its gold traces are read from git.
   --head REV        The head revision (default: HEAD). Its gold traces are read from git.
@@ -169,6 +204,14 @@ compare) and prints where the results are. Interpreting them is the review.
   --uncommitted     Head is the working tree: the baselines under DIR/baseline/appmaps,
                     blessed but not committed.
   --dir DIR         Gold-traces directory, relative to the project root (default: gold_traces).
+  --base-appmap FILE, --head-appmap FILE
+                    Ad-hoc mode: the recording made on each side. Both are copied to one
+                    trace name, so the compare reports one trace however the files are named.
+  --name NAME       Ad-hoc mode: that trace name (default: the files' shared basename, else
+                    'recording'). In this mode --base and --head are optional and only name
+                    the source diff.
+  --appmap-cli CMD  Ad-hoc mode: the AppMap CLI to run (default: ~/.appmap/bin/appmap if
+                    present, else appmap on PATH). Other modes take it from the manifest.
   --workspace DIR   Where the work happens (default: <system temp>/appmap-review). It is
                     cleared on every run, so the command refuses a non-empty directory it
                     did not make.
@@ -206,6 +249,33 @@ function uncommittedSource(baselineDir) {
     label: `working tree, baselines under ${baselineDir}`,
     collect: (dest) => copyTree(baselineDir, dest),
   };
+}
+
+// One recording made by hand, copied to adhoc/<name>.appmap.json. The revision,
+// when given, only names the source diff.
+function fileSource(file, name, revision) {
+  const source = path.resolve(file);
+  return {
+    ...(revision ?? {}),
+    label: `${revision ? `${revision.label}, ` : ''}recording ${source}`,
+    single: true,
+    collect: async (dest) => {
+      const target = path.join(dest, 'adhoc', `${name}.appmap.json`);
+      await fs.mkdir(path.dirname(target), { recursive: true });
+      try {
+        await fs.copyFile(source, target);
+      } catch (error) {
+        if (error?.code === 'ENOENT') throw new Error(`Recording not found: ${source}`);
+        throw error;
+      }
+      return 1;
+    },
+  };
+}
+
+function sharedName(baseFile, headFile) {
+  const strip = (file) => path.basename(file).replace(/\.appmap\.json$/, '');
+  return strip(baseFile) === strip(headFile) ? strip(baseFile) : 'recording';
 }
 
 // ---------------------------------------------------------------------------
@@ -375,8 +445,9 @@ async function printSummary({ base, head, counts, reportDir }) {
   const added = list(report.newAppMaps);
   const removed = list(report.removedAppMaps);
 
-  console.log(`Base: ${base.label} (${counts.base} gold traces)`);
-  console.log(`Head: ${head.label} (${counts.head} gold traces)`);
+  const traces = (source, count) => (source.single ? '' : ` (${count} gold traces)`);
+  console.log(`Base: ${base.label}${traces(base, counts.base)}`);
+  console.log(`Head: ${head.label}${traces(head, counts.head)}`);
   console.log('');
   console.log(`Traces: ${changed.length} changed, ${added.length} new, ${removed.length} removed.`);
   for (const item of changed) {
@@ -410,7 +481,11 @@ async function printSummary({ base, head, counts, reportDir }) {
   console.log('');
   console.log(`Change report: ${reportFile}`);
   console.log(`Diff diagrams: ${path.join(reportDir, 'diff')}`);
-  console.log(`Source diff:   git diff ${head.sha ? `${base.short}..${head.short}` : base.short}`);
+  if (base.sha) {
+    console.log(`Source diff:   git diff ${head.sha ? `${base.short}..${head.short}` : base.short}`);
+  } else {
+    console.log('Source diff:   not named; pass --base REV [--head REV] to have it printed here.');
+  }
 }
 
 // Resolve symlinks on argv[1] (the skill is often symlinked into .claude/skills/),

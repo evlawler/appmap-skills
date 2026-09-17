@@ -8,7 +8,7 @@ directory is a self-contained skill (a `SKILL.md` the agent reads, plus any asse
 | [`appmap-record`](appmap-record/SKILL.md) | Record runtime data from an application with the AppMap agents. |
 | [`appmap-config`](appmap-config/SKILL.md) | Configure what gets recorded: `appmap.yml` (packages, exclude, shallow, output dir) and function labels, per language. |
 | [`appmap-gold-traces`](appmap-gold-traces/SKILL.md) | Maintain a committed baseline of curated recordings ("gold traces") and bless it as code evolves. |
-| [`appmap-review`](appmap-review/SKILL.md) | Diff a change's runtime behavior against the baseline and write an interpreted code review. |
+| [`appmap-review`](appmap-review/SKILL.md) | Diff a change's runtime behavior against the baseline, or between two recordings made by hand, and write an interpreted code review. |
 | [`appmap-setup`](appmap-setup/SKILL.md) | Get a repository recording AppMap data: config, one unit and one integration recording, noise exclusions, and the working record commands written into `gold_traces/manifest.yaml`. |
 | [`appmap-setup-review`](appmap-setup-review/SKILL.md) | Demonstrate a gold-trace review on an existing change: set up recording and gold traces on a BASE commit, replay onto HEAD, and run `appmap-review` between them. |
 

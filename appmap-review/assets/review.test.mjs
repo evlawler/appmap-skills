@@ -221,3 +221,55 @@ test('compare: refuses to clear a workspace it did not make, and reuses one it d
   const again = runReview(server, 'compare', '--base', 'base', '--workspace', workspace);
   assert.equal(again.status, 0, again.stderr);
 });
+
+// Ad-hoc mode: two recordings named on the command line, no gold traces involved.
+function writeRecording(root, name, content) {
+  const file = path.join(root, name);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify({ content }));
+  return file;
+}
+
+test('compare ad-hoc: two files compare as one trace, whatever their names', (t) => {
+  const { root, server, workspace } = makeRepo(t);
+  const cli = `${process.execPath} ${path.join(root, 'fake-cli.mjs')}`;
+  fs.rmSync(path.join(server, 'gold_traces'), { recursive: true }); // not needed in this mode
+  const before = writeRecording(root, 'runs/2026-09-16T10-00-00.appmap.json', 'orders v1');
+  const after = writeRecording(root, 'runs/2026-09-16T11-30-00.appmap.json', 'orders v2');
+  const result = runReview(server, 'compare', '--base-appmap', before, '--head-appmap', after, '--appmap-cli', cli, '--workspace', workspace);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Base: recording .*2026-09-16T10-00-00\.appmap\.json\n/);
+  assert.match(result.stdout, /Head: recording .*2026-09-16T11-30-00\.appmap\.json\n/);
+  assert.match(result.stdout, /Traces: 1 changed, 0 new, 0 removed\./);
+  assert.match(result.stdout, /changed  adhoc\/recording  \(diff\/adhoc\/recording\.diff\.sequence\.json\)/);
+  assert.match(result.stdout, /Source diff:   not named; pass --base REV/);
+
+  // A name, and revisions for the source diff. A shared basename is the default name.
+  const named = runReview(server, 'compare', '--base-appmap', before, '--head-appmap', after, '--name', 'checkout',
+    '--base', 'base', '--head', 'HEAD', '--appmap-cli', cli, '--workspace', workspace);
+  assert.equal(named.status, 0, named.stderr);
+  assert.match(named.stdout, /Base: base = \w+ base, recording /);
+  assert.match(named.stdout, /changed  adhoc\/checkout/);
+  assert.match(named.stdout, /Source diff:   git diff \w+\.\.\w+/);
+  const same1 = writeRecording(root, 'a/login.appmap.json', 'login v1');
+  const same2 = writeRecording(root, 'b/login.appmap.json', 'login v1');
+  const shared = runReview(server, 'compare', '--base-appmap', same1, '--head-appmap', same2, '--appmap-cli', cli, '--workspace', workspace);
+  assert.equal(shared.status, 0, shared.stderr);
+  assert.match(shared.stdout, /Traces: 0 changed, 0 new, 0 removed\./);
+  assert.ok(fs.existsSync(path.join(workspace, 'head', 'tmp', 'appmap', 'adhoc', 'login.appmap.json')));
+});
+
+test('compare ad-hoc: rejects one side only, a mix with --fresh, and a missing file', (t) => {
+  const { root, server, workspace } = makeRepo(t);
+  const cli = `${process.execPath} ${path.join(root, 'fake-cli.mjs')}`;
+  const one = writeRecording(root, 'one.appmap.json', 'v1');
+  const oneSided = runReview(server, 'compare', '--base-appmap', one, '--appmap-cli', cli, '--workspace', workspace);
+  assert.equal(oneSided.status, 1);
+  assert.match(oneSided.stderr, /needs both sides/);
+  const mixed = runReview(server, 'compare', '--base-appmap', one, '--head-appmap', one, '--fresh', '--appmap-cli', cli, '--workspace', workspace);
+  assert.equal(mixed.status, 1);
+  assert.match(mixed.stderr, /cannot be combined with --fresh/);
+  const missing = runReview(server, 'compare', '--base-appmap', one, '--head-appmap', path.join(root, 'nope.appmap.json'), '--appmap-cli', cli, '--workspace', workspace);
+  assert.equal(missing.status, 1);
+  assert.match(missing.stderr, /Recording not found: .*nope\.appmap\.json/);
+});
