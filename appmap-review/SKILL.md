@@ -118,6 +118,29 @@ when it will read better (a moved block, or a diff too large to scan), the diagr
 in every other case, and both when the changed nodes carry labels. The sequence
 diagram remains the authority for whether a trace changed.
 
+### Asking the recordings a question
+
+When a diff raises a question, ask the recordings rather than guessing. The helper
+leaves a query database for each side in the workspace, `base-query.db` and
+`head-query.db`. Run these from `<workspace>/base` or `<workspace>/head`, with
+`<trace>` as the summary prints it (`pytest/test_x`, `adhoc/checkout`):
+
+```sh
+# the tree around one function; --focus-fn needs the full id, as the tree prints it
+appmap query tree <trace> --appmap-dir <workspace>/head/<appmap_dir> --query-db <workspace>/head-query.db \
+  --focus-fn nova_server/events/arrival/ArrivalEvent#execute --ancestors 1 --descendants 4
+
+# every call of one function with its arguments, one row each: proves "ran twice with the same inputs"
+appmap query find calls --method _next_hop --appmap-dir <workspace>/head/<appmap_dir> --query-db <workspace>/head-query.db
+
+# every query on one table, with its caller
+appmap query find queries --table jump_gates --appmap-dir ... --query-db ...
+```
+
+The same questions are available as tools from `appmap query mcp --appmap-dir <dir>
+--query-db <db>` (`get_call_tree`, `find_calls`, `find_queries`), worth registering
+with `claude mcp add` for a review with a lot of back-and-forth.
+
 The workspace is `<system temp>/appmap-review`. It sits outside the repo, so its
 files never get committed by accident, and it is cleared at the start of every
 run. Pass `--workspace DIR` to keep two reviews side by side. When a CLI step
