@@ -705,12 +705,16 @@ async function snapshotAppmaps(dir) {
         await walk(full);
       } else if (dirent.name.endsWith('.appmap.json')) {
         const stat = await fs.stat(full);
-        snapshot.set(path.relative(dir, full), `${stat.mtimeMs}:${stat.size}`);
+        snapshot.set(normalizeAppMapPath(path.relative(dir, full)), `${stat.mtimeMs}:${stat.size}`);
       }
     }
   }
   await walk(dir);
   return snapshot;
+}
+
+function normalizeAppMapPath(relPath) {
+  return relPath.replace(/\\/g, '/');
 }
 
 // Paths new in `after` or whose signature changed — i.e. what the record run wrote.
@@ -1162,7 +1166,7 @@ function parseYaml(text, filename = 'manifest.yaml') {
 // The appmap-review skill's helper (appmap-review/assets/review.mjs) reuses the
 // manifest reader, the appmap.yml lookup, and the CLI resolution from here.
 export {
-  parseYaml, diagramDigest, changedAppmaps, assessAppMap, coverageOf, coverageDelta,
+  parseYaml, diagramDigest, changedAppmaps, assessAppMap, coverageOf, coverageDelta, normalizeAppMapPath,
   loadManifest, locateAppmap, defaultAppmapCli,
 };
 

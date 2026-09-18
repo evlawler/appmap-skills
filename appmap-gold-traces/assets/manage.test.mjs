@@ -19,7 +19,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
-  parseYaml, diagramDigest, changedAppmaps, assessAppMap, coverageOf, coverageDelta,
+  parseYaml, diagramDigest, changedAppmaps, assessAppMap, coverageOf, coverageDelta, normalizeAppMapPath,
 } from './manage.mjs';
 
 const MANAGE = fileURLToPath(new URL('./manage.mjs', import.meta.url));
@@ -586,6 +586,11 @@ test('changedAppmaps: an overwritten recording (changed signature) counts as pro
 test('changedAppmaps: untouched files are not reported', () => {
   const same = new Map([['pytest/t.appmap.json', '1:10']]);
   assert.deepEqual(changedAppmaps(same, new Map(same)), []);
+});
+
+test('normalizeAppMapPath: converts Windows separators to manifest-style slashes', () => {
+  const relative = path.win32.relative('tmp\\appmap', 'tmp\\appmap\\pytest\\test.appmap.json');
+  assert.equal(normalizeAppMapPath(relative), 'pytest/test.appmap.json');
 });
 
 // --- YAML reader (config supports the `expand` list) ---------------------
