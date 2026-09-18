@@ -435,9 +435,7 @@ headless machine. The agent-facing counterpart of the same data is
 Do **not** reach for `appmap open <file>` for this. It renders one recording in the
 single-map IDE viewer, not the browsable overview, and in CLI 3.20x its bundled
 viewer page is blank in a browser (`ReferenceError: process is not defined` from
-`appmap.js`). If a single-map view is needed anyway, the workaround is a one-line
-shim in the CLI's `built/html/appmap.html`, before the `appmap.js` script tag:
-`<script>window.process=window.process||{env:{}}</script>`.
+`appmap.js`). Report that, don't patch the CLI around it.
 
 ## Rules for the interpretation
 
