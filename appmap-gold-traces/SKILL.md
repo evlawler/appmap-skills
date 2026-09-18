@@ -557,7 +557,10 @@ The engine has five commands — `check` (shape, coverage, and stability), `upda
 (record + digest-gated bless), `discover` (find a new entry's `appmap_path`),
 `covers` (which baseline runs a piece of code), and `plan` (show the record
 commands without running them). Diffing and reviewing a change is the
-**appmap-review** skill's job.
+**appmap-review** skill's job. To let a person browse a set of recordings, run
+`appmap index --appmap-dir DIR` then `appmap query ui --appmap-dir DIR --port N`
+(see **Show the recordings to the reader** in appmap-review); `appmap open` is
+the single-map IDE viewer, not that.
 
 ```
 update    [--dir DIR] [--only TEST] [--record] [--dry-run]

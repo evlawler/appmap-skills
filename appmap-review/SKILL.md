@@ -413,6 +413,32 @@ side effects (mechanical propagation, confirmed blast radius).
 </details>
 ~~~
 
+## Show the recordings to the reader
+
+The report is text; the recordings behind it are browsable. When the reader can reach
+a port on the machine that ran the review (a Devin session, a shared dev box), open
+the CLI's web UI over the recordings and hand them the link alongside the report:
+
+```
+appmap index    --appmap-dir <gold_traces>/baseline/appmaps
+appmap query ui --appmap-dir <gold_traces>/baseline/appmaps --port <port> --no-open
+```
+
+`appmap query ui` serves a dashboard over the indexed recordings — endpoints, SQL,
+functions, exceptions, labels, per-recording call trees, and a branch compare — and
+is the interface meant for a person. `appmap index` must run first; `query ui` reads
+the index it builds under `~/.appmap/data/` and fails with "query DB not found"
+otherwise. Pass `--port` so the URL is stable enough to share, and `--no-open` on a
+headless machine. The agent-facing counterpart of the same data is
+`appmap query mcp` (and the `appmap query …` verbs on the command line).
+
+Do **not** reach for `appmap open <file>` for this. It renders one recording in the
+single-map IDE viewer, not the browsable overview, and in CLI 3.20x its bundled
+viewer page is blank in a browser (`ReferenceError: process is not defined` from
+`appmap.js`). If a single-map view is needed anyway, the workaround is a one-line
+shim in the CLI's `built/html/appmap.html`, before the `appmap.js` script tag:
+`<script>window.process=window.process||{env:{}}</script>`.
+
 ## Rules for the interpretation
 
 - **Reason from labels + structure + source, never from a rule table.** A
